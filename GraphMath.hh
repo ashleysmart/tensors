@@ -3,6 +3,8 @@
 #include <tuple>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
+
 #include "test.hh"
 
 typedef std::vector<Tensor<double> > Tensors;
@@ -85,24 +87,37 @@ struct Const : Node
 
 struct VarDerivedConst : Node
 {
-    int    srcId_;
     double value_;
+    int    outerID_;
+    int    innerID_;
 
-    VarDerivedConst(int srcID,
-                double value) :
-        srcId_(srcID),
-        value_(value)
+    VarDerivedConst(double value,
+                    int outerID,
+                    int innerID) :
+        value_(value),
+        outerID_(outerID),
+        innerID_(innerID)
     {}
 
     void render(std::ostream& os) const
     {
-        os << "{" << value_ << "}";
+        os << "{" << value_ << ":" << outerID_ << "x" << innerID_ << "}";
     }
 
     Tensor<double> op(const Tensors& params ) const
     {
-        const Tensor<double>& src = params[srcId_];
-        return unifunc(src, [value_](double ){ return value_; });
+        //*sigh* because you cant pass a *member* to lamdbas, you need to pass this which is not *const* correct
+        double val = value_;
+        const Tensor<double>& outer = params[outerID_];
+        const Tensor<double>& inner = params[innerID_];
+
+        Tensor<double>::Shape rShape;
+        std::copy(TensorUtils<double>::shape(outer).begin(), TensorUtils<double>::shape(outer).end(), std::back_inserter(rShape));
+        std::copy(TensorUtils<double>::shape(inner).begin(), TensorUtils<double>::shape(inner).end(), std::back_inserter(rShape));
+
+        // this is inefficent.. the constructor news memory... then the unifunc allocates a second
+        Tensor<double> r(rShape);
+        return unifunc<double>(r, [val](double){ return val; });
     }
 
     std::shared_ptr<Node> derive(const std::shared_ptr<Node>& denum)
@@ -111,12 +126,14 @@ struct VarDerivedConst : Node
     }
 };
 
-template <int ID>
 struct Var : Node
 {
+    int    srcID_;
     std::string label_;
 
-    Var(std::string label) :
+    Var(int srcID,
+        std::string label) :
+        srcID_(srcID),
         label_(label)
     {}
 
@@ -127,20 +144,33 @@ struct Var : Node
 
     Tensor<double> op(const Tensors& params ) const
     {
-        return params[ID];
+        return params[srcID_];
     }
 
     std::shared_ptr<Node> derive(const std::shared_ptr<Node>& denum)
     {
+        // incorrect the tensor maths shows this as
+        // dc_abc../dx_ijk.. = sum_i(sum_j(....( U_i U_j U_k ... d/dx_ijk... ))) sum_a(sum_b(....( U_a U_b U_c ... c_abc... )))
+        //                   = sum_i(sum_j(....( sum_a(sum_b(....( U_i U_j U_k... U_a U_b U_c... d/dx_ijk...(c_abc... ) ))) ... )))
+        //                   = sum_i(sum_j(....( sum_a(sum_b(....( U_i U_j U_k... U_a U_b U_c... d/dx_ijk...(c_abc... ) ))) ... )))
+        //                     |--------------- sums ------------|----- dimensional vector -----|----- operation -----|--- sums --|
+        int denumID = -1;
+
+        if (const Var* ptr = dynamic_cast<Var*>(denum.get()))
+            denumID = ptr->srcID_;
+        else
+            throw std::runtime_error("derivate with non-var base not supported yet... mosty cause i have no idea how to get the shape..");
+
         if (*denum == *this)
-            return std::shared_ptr<Node>(new VarDerivedConst(1,ID));
-        return std::shared_ptr<Node>(new VarDerivedConst(0,ID));
+            return std::shared_ptr<Node>(new VarDerivedConst(1, denumID, srcID_));
+        return std::shared_ptr<Node>(new VarDerivedConst(0, denumID, srcID_));
     }
 
     virtual bool equals(const Node& other)
     {
-        if (const Var<ID>* ptr = dynamic_cast<const Var<ID>*>(&other))
-            return true;
+        if (const Var* ptr = dynamic_cast<const Var*>(&other))
+            if (ptr->srcID_ == srcID_)
+                return true;
         return false;
     }
 };
@@ -299,10 +329,10 @@ struct OpPower : Node
 // just simplify the typeing
 struct Make
 {
-    template <int ID>
-    static std::shared_ptr<Node> var(const std::string& ident)
+    static std::shared_ptr<Node> var(const int srcID,
+                                     const std::string& ident)
     {
-        std::shared_ptr<Node> node(new Var<ID>(ident));
+        std::shared_ptr<Node> node(new Var(srcID, ident));
         return node;
     }
 

@@ -2,9 +2,9 @@
 
 void graphTest()
 {
-    std::shared_ptr<Node> x = Make::var<0>("x");
-    std::shared_ptr<Node> m = Make::var<1>("m");
-    std::shared_ptr<Node> c = Make::var<2>("c");
+    std::shared_ptr<Node> x = Make::var(0, "x");
+    std::shared_ptr<Node> m = Make::var(1, "m");
+    std::shared_ptr<Node> c = Make::var(2, "c");
 
     std::shared_ptr<Node> s = Make::add(c,c);                             // s = c + c
     std::shared_ptr<Node> p = Make::add(x,c);                             // p = x + c
@@ -30,6 +30,10 @@ void graphTest()
     params.push_back(tx);
     params.push_back(tm);
     params.push_back(tc);
+
+    EXPECT_EQ(tx,x->op(params));
+    EXPECT_EQ(tm,m->op(params));
+    EXPECT_EQ(tc,c->op(params));
 
     EXPECT_EQ(Tensor<double>({2},{ 10,  12}),s->op(params));
     EXPECT_EQ(Tensor<double>({2},{  6,   8}),p->op(params));
@@ -60,15 +64,41 @@ void graphTest()
     std::cout << "\n"    << q->op(params);
     std::cout << "\n";
 
-    EXPECT_EQ(Tensor<double>({2},  {0,0}),     dC_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2},  {0,0}),     dS_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2},  {1,1}),     dX_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2},  {1,1}),     dP_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2,2},{1,2,3,4}), dR_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2,2},{1,2,3,4}), dY_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2},{ 10,  12}),  dZ_dX->op(params));
-    EXPECT_EQ(Tensor<double>({2},{  6,   8}),  dQ_dX->op(params));
+    // p = x + c
+    // dp1/dx1 = 1 dp2/dx1 = 0
+    // dp1/dx2 = 0 dp2/dx2 = 1
+    //
+    //Hence
+    // dp/dx = [ 1 0 ]
+    //         [ 0 1 ]
 
+    // dp/dx = sum_i(U_i d/dx_i) sum_j(U_j (x_j + c_j))
+    //       = sum_i(sum_j( U_i U_j d/dx_i(x_j + c_j)))
+    //     Given
+    //       d/dx_i(x_j + c_j) = 0 when i != j
+    //       d/dx_i(x_j + c_j) = 1 when i == j
+    //
+    // if i==j
+    // dp/dx = sum_i(sum_i( U_i U_i d/dx_i(x_i + c_i)))
+    //       = sum_i( U_i U_i 1 )
+    //       = sum_i( U_i U_i 1 )
+    // if i!=j
+    // dp/dx = sum_i(sum_j( U_i U_j d/dx_i(x_j + c_j)))
+    //       = sum_i(sum_j( U_i U_j 0))
+    //       = 0
+    //
+    //Hence
+    // dp/dx = [ 1 0 ]
+    //         [ 0 1 ]
+
+    // EXPECT_EQ(Tensor<double>({4},  {0,0,0,0}),   dC_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({4},  {0,0,0,0}),   dS_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({4},  {1,0,0,1}),   dX_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({4},  {1,0,0,1}),   dP_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({2,2},{1,2,3,4}),   dR_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({2,2},{1,2,3,4}),   dY_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({2},  { 10,  12}),  dZ_dX->op(params));
+    // EXPECT_EQ(Tensor<double>({2},  {  6,   8}),  dQ_dX->op(params));
 
     std::cout << "\n dc/dx:" << dC_dX->renderOps();
     std::cout << "\n dc/dx:" << dS_dX->renderOps();

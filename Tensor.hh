@@ -11,6 +11,8 @@
 #include <iterator>
 #include <vector>
 #include <algorithm>
+#include <iostream>
+#include <iomanip>
 
 // ****************************************************************
 // *************************** Tensor *****************************
@@ -45,8 +47,10 @@ private:
     std::shared_ptr<Data> data_;
     Shape                 shape_;
 
-    std::size_t offsetOf(const std::initializer_list<std::size_t>& indexes) const
+    template <typename Container>
+    std::size_t offsetOf(const Container& indexes) const
     {
+        // note here.. its moving in tensor/matrix form.. 0 to n... y to x... row to col.. big to small
         if (shape_.size() != indexes.size())
         {
             std::stringstream ss;
@@ -71,17 +75,7 @@ private:
                 throw std::runtime_error(ss.str());
             }
 
-            if (rank == 0)
-            {
-                offset     = idx;
-                rank_scale = shape_[rank];
-            }
-            else
-            {
-                offset += rank_scale * idx;
-                rank_scale *= shape_[rank];
-            }
-
+            offset = (offset * shape_[rank]) + idx;
             ++rank;
         }
         return offset;
@@ -104,8 +98,8 @@ public:
     }
 
     template <std::size_t N>
-    Tensor(Type (&raw)[N],
-           const Shape& shape) :
+    Tensor(const Shape& shape,
+           Type (&raw)[N]) :
         data_(new Data),
         shape_(shape)
     {
@@ -124,8 +118,8 @@ public:
         data_->assign(raw,raw+N);
     }
 
-    Tensor(const std::initializer_list<Type>& init,
-           const Shape& shape):
+    Tensor(const Shape& shape,
+           const std::initializer_list<Type>& init) :
         data_(new Data),
         shape_(shape)
     {
@@ -144,8 +138,8 @@ public:
         data_->assign(init.begin(),init.end());
     }
 
-    Tensor(Type* begin, Type* end,
-           const Shape& shape):
+    Tensor(const Shape& shape,
+           Type* begin, Type* end) :
         data_(new Data),
         shape_(shape)
     {
@@ -163,12 +157,11 @@ public:
         data_->assign(begin,end);
     }
 
-    Tensor(std::shared_ptr<Data> data,
-           const Shape& shape):
+    Tensor(const Shape& shape,
+           std::shared_ptr<Data> data):
         data_(data),
         shape_(shape)
     {}
-
 
     std::size_t size() const
     {
@@ -182,7 +175,15 @@ public:
         return theSize;
     }
 
-    Type& at(const std::initializer_list<std::size_t>& indexes)
+    template <typename Container>
+    Type& at(const Container& indexes)
+    //Type& at(const std::initializer_list<std::size_t>& indexes)
+    {
+        return (*data_)[offsetOf(indexes)];
+    }
+
+    template <typename Container>
+    Type at(const Container& indexes) const
     {
         return (*data_)[offsetOf(indexes)];
     }
@@ -205,25 +206,96 @@ public:
 template <typename Type>
 struct TensorUtils : public Tensor<Type>::Accessor
 {
+    typedef typename Tensor<Type>::Data  Data;
+    typedef typename Tensor<Type>::Shape Shape;
+
     typedef typename Tensor<Type>::Data::iterator       iterator;
     typedef typename Tensor<Type>::Data::const_iterator const_iterator;
 
     // *sigh*.. why gcc 4.9.. the compiler had better inline this crud..
-    static       typename Tensor<Type>::Data&  data (      Tensor<Type>& a) { return Tensor<Type>::Accessor::data(a);  }
-    static const typename Tensor<Type>::Data&  data (const Tensor<Type>& a) { return Tensor<Type>::Accessor::data(a);  }
-    static       typename Tensor<Type>::Shape& shape(      Tensor<Type>& a) { return Tensor<Type>::Accessor::shape(a); }
-    static const typename Tensor<Type>::Shape& shape(const Tensor<Type>& a) { return Tensor<Type>::Accessor::shape(a); }
+    static       Data&  data (      Tensor<Type>& a) { return Tensor<Type>::Accessor::data(a);  }
+    static const Data&  data (const Tensor<Type>& a) { return Tensor<Type>::Accessor::data(a);  }
+    static       Shape& shape(      Tensor<Type>& a) { return Tensor<Type>::Accessor::shape(a); }
+    static const Shape& shape(const Tensor<Type>& a) { return Tensor<Type>::Accessor::shape(a); }
 
+    static bool increment(      Shape& idx,
+                          const Shape& limit,
+                          int skip)
+    {
+        // add one to the little end (the end of the idx)
+        int offset = idx.size()-1;
+        idx[offset] += 1;
+
+        // now ripple count forward
+        while (offset >= 0 and
+               (offset == skip or
+                idx[offset] >= limit[offset]))
+        {
+            idx[offset] = 0;
+            offset -= 1;
+            if (offset >= 0) idx[offset] += 1;
+        }
+
+        // determine carry overflow (and hence termination..)
+        if (offset < 0) return false;
+        return true;
+    }
 
     static void print(std::ostream& os, const Tensor<Type>& a)
     {
-        for (std::size_t y = 0; y < shape(a)[1]; ++y)
+        if (shape(a).size() == 1)
         {
+            os << "[";
             for (std::size_t x = 0; x < shape(a)[0]; ++x)
             {
-                os << a.at({x,y}) << " ";
+                if (x != 0) os << " ";
+                os << std::setw(5) << a.at({x});
             }
-            os << "\n";
+            os << "]\n";
+        }
+        // else if (shape(a).size() == 2)
+        // {
+        //     os << "[";
+        //     for (std::size_t y = 0; y < shape(a)[0]; ++y)
+        //     {
+        //         if (y != 0) os << "\n ";
+        //         os << "[";
+        //         for (std::size_t x = 0; x < shape(a)[1]; ++x)
+        //         {
+        //             if (x != 0) os << " ";
+        //             os << std::setw(5) << a.at({y,x});
+        //         }
+        //         os << "]";
+        //     }
+        //     os << "]\n";
+        // }
+        else
+        {
+            // N-dim print
+            const Shape& limit = shape(a);
+            int lenA = limit.size();
+            Shape idxA(lenA,0);
+
+            os << join(limit, "x") << "\n";
+            do
+            {
+                for (std::size_t x=0; x < lenA-1; ++x)
+                {
+                    os << idxA[x] << ":";
+                }
+
+                os << "[";
+                for (std::size_t x = 0; x < limit[lenA-1]; ++x)
+                {
+                    if (x != 0) os << " ";
+                    idxA[lenA-1] = x;
+
+                    if (x != 0) os << " ";
+                    os << std::setw(5) << a.at(idxA);
+                }
+                os << "]\n";
+             }
+             while(increment(idxA, shape(a), lenA-1));
         }
     }
 
@@ -245,6 +317,11 @@ struct TensorUtils : public Tensor<Type>::Accessor
         int lenA = shape(a).size();
         int lenB = shape(b).size();
 
+        // double check for scaler product..
+        // it might happen because im having trouble with the template reduction of zeros..
+        // some ops also shorten tensors of 0 and 1 to raw scaler .. hmm "1" would be incorrect
+        // if (lenA == 1 and shape(a)[0] == 1)
+
         if (shape(a)[lenA-1] != shape(b)[0])
         {
             std::stringstream ss;
@@ -253,30 +330,54 @@ struct TensorUtils : public Tensor<Type>::Accessor
                << " b: " << join(shape(b),"x");
             throw std::runtime_error(ss.str());
         }
+        std::size_t iLen = shape(b)[0];
 
         // the new shape is the start of the left (remove the last dim)
         // with the end of the right (remove the first dim)
-        std::vector<int> newShape;
-        std::copy(shape(a).begin()  , shape(a).end()-1, newShape.end());
-        std::copy(shape(b).begin()+1, shape(b).end()  , newShape.end());
+        // a 1D x 1D can do this.. resulting in a scaler..
+        Shape rShape;
+        if (lenA > 1) std::copy(shape(a).begin()  , shape(a).end()-1, std::back_inserter(rShape));
+        if (lenB > 1) std::copy(shape(b).begin()+1, shape(b).end()  , std::back_inserter(rShape));
+
+        if (rShape.size() == 0) rShape = Shape({1});
+
+        // std::cout << "DEBUG ashape:"  << join(shape(a),"x") << "\n";
+        // std::cout << "DEBUG bshape:"  << join(shape(b),"x") << "\n";
+        // std::cout << "DEBUG rshape:"  << join(rShape,"x") << "\n";
 
         // ACS todo.. the general tensor form please..
-        Tensor<Type> res({shape(b)[0], shape(a)[1]});
+        Tensor<Type> res(rShape);
 
-        SkipIterator ait
-
-        for (std::size_t y = 0; y < shape(res)[1]; ++y)
+        // hence the general form is
+        // r[n,m,l,...,z,y,x,...] = sum_i(a[n,m,l...,i] * b[i,z,y,x,...])
+        Shape idxA(lenA,0);
+        do
         {
-            for (std::size_t x = 0; x < shape(res)[0]; ++x)
+            Shape idxB(lenB,0);
+            do
             {
                 Type sum = 0;
-                for (std::size_t i = 0; i < shape(a)[0]; ++i)
+                for (std::size_t i = 0; i < iLen; ++i)
                 {
-                    sum += a.at({i,y}) * b.at({x,i});
+                    idxA[lenA-1] = i;
+                    idxB[0]      = i;
+                    sum += a.at(idxA) * b.at(idxB);
+                    // std::cout << "DEBUG a:" << join(idxA,"x") << " (" << a.at(idxA) << ") + "
+                    //           << " b:" << join(idxB,"x") << " (" << b.at(idxB) << ") -> "
+                    //           << " sum:" << sum << "\n";
                 }
-                res.at({x,y}) = sum;
+
+                // ACS this sucks.. its copying the counts over and over.. can be done better
+                Shape idxR;
+                std::copy(idxA.begin()  , idxA.end()-1, std::back_inserter(idxR));
+                std::copy(idxB.begin()+1, idxB.end()  , std::back_inserter(idxR));
+
+                // std::cout << "DEBUG r:" << join(idxR,"x") << " --> " << sum << "\n";
+                res.at(idxR) = sum;
             }
+            while(increment(idxB, shape(b), 0));
         }
+        while(increment(idxA, shape(a), lenA-1));
 
         return res;
     }
@@ -364,8 +465,7 @@ struct TensorUtils : public Tensor<Type>::Accessor
                                   const Tensor<Type>& b)
 
     {
-        if (shape(a)[0] != shape(b)[0] or
-            shape(a)[1] != shape(b)[1])
+        if (shape(a) != shape(b))
         {
             std::stringstream ss;
             ss << "Tensor shapes mismatch for bifunctor"
@@ -463,7 +563,7 @@ struct TensorUtils : public Tensor<Type>::Accessor
     {
         // TODO this feels llike there should be an std:algo for it
         //  maybe generate ??
-        Tensor<Type> r(shape(b)[0], shape(b)[1]);
+        Tensor<Type> r(shape(b));
 
         const_iterator bit = data(b).begin();
         iterator       rit = data(r).begin();
@@ -484,7 +584,7 @@ struct TensorUtils : public Tensor<Type>::Accessor
     {
         // TODO this feels llike there should be an std:algo for it
         //  maybe generate ??
-        Tensor<Type> r(shape(a)[0], shape(a)[1]);
+        Tensor<Type> r(shape(a));
 
         const_iterator ait = data(a).begin();
         iterator       rit = data(r).begin();
@@ -534,7 +634,8 @@ struct TensorUtils : public Tensor<Type>::Accessor
         static Type tanh(Type a) { return std::tanh(a); }
         static Type rand(Type a) { return static_cast<Type>(std::rand() % 100)/100.0 - 0.5; }
 
-        static Type ones(Type a) { return 1.0; }
+        static Type zeros(Type a) { return 0.0; }
+        static Type ones(Type a)  { return 1.0; }
         static Type xor_f(Type a, Type b) { return (a*b < 0) ? -1.0 : 1.0; }
     };
 };
@@ -656,10 +757,24 @@ Tensor<Type> pow(const Tensor<Type>& a, int power)
 }
 
 template <typename Type>
-void ones(Tensor<Type>& a)
+Tensor<Type> zeros(Tensor<Type>& a)
 {
-    TensorUtils<Type>::unifunctor_inplace(&TensorUtils<Type>::Helpers::ones,a);
+    return TensorUtils<Type>::unifunctor(&TensorUtils<Type>::Helpers::zeros,a);
 }
+
+template <typename Type>
+Tensor<Type> ones(Tensor<Type>& a)
+{
+    return TensorUtils<Type>::unifunctor(&TensorUtils<Type>::Helpers::ones,a);
+}
+
+template <typename Type>
+Tensor<Type> unifunc(const Tensor<Type>& a,
+                     std::function<Type (Type)> func)
+{
+    return TensorUtils<Type>::unifunctor(func,a);
+}
+
 
 
 #endif

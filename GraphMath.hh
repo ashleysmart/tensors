@@ -7,6 +7,20 @@
 
 #include "test.hh"
 
+// Design notes
+//  the OpPower shows an unnessary difficultly... the derivate op [ sum_i(U_i d/dx_i(...)) ]
+//  causes dimesional growth depending on the denumators shape... the VarDerivedConst had
+//  the same issue but i just hacked it together inelgently .. now that im facing the same
+//  thing wth OpPower the rule of 1,2,many says im out of bounds.. any new functoion like
+//  OpSine is going to hit it
+
+//  There is a better way.. the maths its self reflects this, the mathmatical ops are
+//  seperated and flow around with a clear set of rules.. this should be represntable in
+//  the system.. this imples a generator methodoly where the for/idx/sum ops are contained
+//  in an object.. this breaks up the entire Tensor code..
+
+
+
 typedef std::vector<Tensor<double> > Tensors;
 
 struct Node
@@ -111,13 +125,14 @@ struct VarDerivedConst : Node
         const Tensor<double>& outer = params[outerID_];
         const Tensor<double>& inner = params[innerID_];
 
-        Tensor<double>::Shape rShape;
+        TensorShape rShape;
         std::copy(TensorUtils<double>::shape(outer).begin(), TensorUtils<double>::shape(outer).end(), std::back_inserter(rShape));
         std::copy(TensorUtils<double>::shape(inner).begin(), TensorUtils<double>::shape(inner).end(), std::back_inserter(rShape));
 
         // this is inefficent.. the constructor news memory... then the unifunc allocates a second
-        Tensor<double> r(rShape);
-        return unifunc<double>(r, [val](double){ return val; });
+        if (value_ == 0.0)
+            return zeros<double>(rShape);
+        return value_ * eye<double>(rShape);
     }
 
     std::shared_ptr<Node> derive(const std::shared_ptr<Node>& denum)
@@ -313,16 +328,31 @@ struct OpPower : Node
 
     std::shared_ptr<Node> derive(const std::shared_ptr<Node>& denum)
     {
-        std::shared_ptr<Node> pwrDown =
-            std::shared_ptr<Node>(new OpPower(left_,
-                                              pow_));
+        std::cout << "start...\n";
+        // TODO correct the chain rule for indirect vars
+        if (const Var* denumPtr = dynamic_cast<const Var*>(denum.get()))
+        {
+            if (const Var* leftPtr = dynamic_cast<const Var*>(left_.get()))
+            {
+                std::cout << "ok..."
+                          << " d:" << denumPtr->srcID_
+                          << " l:" << leftPtr->srcID_
+                          << "\n";
+                if (denumPtr->srcID_ == leftPtr->srcID_)
+                {
+                    std::shared_ptr<Node> pwrAsConst(new ScalarConst(pow_));
 
-        std::shared_ptr<Node> outerDeriv =
-            std::shared_ptr<Node>(new OpScalarMult(pwrDown,
-                                                   left_));
+                    std::shared_ptr<Node> toTheNthMinusOne(new OpPower(left_,
+                                                                       pow_-1));
 
-        return std::shared_ptr<Node>(new OpDot(outerDeriv,
-                                               left_->derive(denum)));
+                    std::shared_ptr<Node> outerDeriv(new OpScalarMult(pwrAsConst,
+                                                                      toTheNthMinusOne));
+
+                    return outerDeriv;
+                }
+            }
+        }
+        throw std::runtime_error("hissy fit.. jobs not done yet");
     }
 };
 

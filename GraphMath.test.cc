@@ -10,6 +10,7 @@ void graphTest()
     std::shared_ptr<Node> p = Make::add(x,c);                             // p = x + c
     std::shared_ptr<Node> r = Make::dot(x,m);                             // r = m*x + c
     std::shared_ptr<Node> y = Make::add(Make::dot(x,m),c);                // y = m*x + c
+    std::shared_ptr<Node> l = Make::power(x,2);                           // l = x^2
     std::shared_ptr<Node> z = Make::add(Make::dot(Make::power(x,2),m),c); // z = m*x^2 + c
     std::shared_ptr<Node> q = Make::power(Make::add(Make::dot(x,m),c),2); // q = = y^2 = (m*x + c)^2
 
@@ -19,8 +20,9 @@ void graphTest()
     std::shared_ptr<Node> dP_dX = Make::derivativeOf(p, x);
     std::shared_ptr<Node> dR_dX = Make::derivativeOf(r, x);
     std::shared_ptr<Node> dY_dX = Make::derivativeOf(y, x);
+    std::shared_ptr<Node> dL_dX = Make::derivativeOf(l, x);
     std::shared_ptr<Node> dZ_dX = Make::derivativeOf(z, x);
-    std::shared_ptr<Node> dQ_dX = Make::derivativeOf(q, x);
+    // std::shared_ptr<Node> dQ_dX = Make::derivativeOf(q, x);
 
     Tensor<double> tx({2}, {1,2});
     Tensor<double> tm({2,2}, {1,2,3,4});
@@ -106,8 +108,9 @@ void graphTest()
     std::cout << "\n dp/dx:" << dP_dX->renderOps();
     std::cout << "\n dr/dx:" << dR_dX->renderOps();
     std::cout << "\n dy/dx:" << dY_dX->renderOps();
+    std::cout << "\n dl/dx:" << dL_dX->renderOps();
     std::cout << "\n dz/dx:" << dZ_dX->renderOps();
-    std::cout << "\n dq/dx:" << dQ_dX->renderOps();
+    //std::cout << "\n dq/dx:" << dQ_dX->renderOps();
     std::cout << "\n";
 
     std::cout << "\n dc/dx:" << dC_dX->renderOps();
@@ -122,14 +125,23 @@ void graphTest()
     std::cout << "\n"        << dR_dX->op(params);
     std::cout << "\n dy/dx:" << dY_dX->renderOps();
     std::cout << "\n"        << dY_dX->op(params);
+    std::cout << "\n dl/dx:" << dL_dX->renderOps();
+    std::cout << "\n"        << dL_dX->op(params);
     std::cout << "\n dz/dx:" << dZ_dX->renderOps();
     std::cout << "\n"        << dZ_dX->op(params);
-    std::cout << "\n dq/dx:" << dQ_dX->renderOps();
-    std::cout << "\n"        << dQ_dX->op(params);
+    // std::cout << "\n dq/dx:" << dQ_dX->renderOps();
+    // std::cout << "\n"        << dQ_dX->op(params);
     std::cout << "\n";
 }
 
 int main()
 {
-    graphTest();
+    try
+    {
+        graphTest();
+    }
+    catch(std::exception& e)
+    {
+        std::cout << "Opps.." << e.what() << "\n";
+    }
 }

@@ -313,173 +313,33 @@ std::ostream& operator<<(std::ostream& os,
 // ################################################
 // ################################################
 
-class SumLifter
+template <typename NodeType>
+class Has
 {
-    //  starts as
-    //                 P
-    //                / \
-    //               C
-    //              / \
-    //             S
-    //             |
-    //             K
-    //  converts to
-    //                 P
-    //                / \
-    //               S
-    //               |
-    //               C
-    //              / \
-    //             K
+    // determine if the expression handed in has the type of node listed
+public:
+    Has() {}
 
-    struct State
+    bool find(const Handle& node)
     {
-        Handle parent_;
-        Handle current_;
-    };
-
-    friend StatefulDispatcher<SumLifter, State>;
-
-    bool   found_;
-    Handle parent_;
-    Handle current_;
-    Handle summer_;
-
-    Handle lift(Handle exp)
-    {
-        // TODO this seems like a more general tree op.. better abstract it
-        if (parent_.get() != NULL)
-        {
-            // now we need to rotate the summer up..
-            // replace the "parents" link to "current" with "summer"
-            for (Nodes::iterator nit = parent_->children_.begin();
-                 nit != parent_->children_.end();
-                 ++nit)
-            {
-                if (*nit == current_)
-                {
-                    *nit = summer_;
-                    break;
-                }
-            }
-        }
-
-        // then replace the "currents" link to "summer" with summers kid
-        for (Nodes::iterator nit = current_->children_.begin();
-             nit != current_->children_.end();
-             ++nit)
-        {
-            if (*nit == summer_)
-            {
-                *nit = summer_->children_[1];
-                break;
-            }
-        }
-
-        // finally replace "summers" link to its kid with "current"
-        summer_->children_[1] = current_;
-
-        if (parent_.get() == NULL)
-        {
-            // where at the top so replace the entire expersion
-            exp = summer_;
-        }
-
-        return exp;
-    }
-
-    bool test(State& state, Handle& child)
-    {
-        // check child
-        if (const Summer* ptr = dynamic_cast<Summer*>(child.get()))
-        {
-            parent_  = state.parent_;
-            current_ = state.current_;
-            summer_  = child;
-            found_   = true;
+        if (const NodeType* ptr = dynamic_cast<NodeType*>(node.get()))
             return true;
+
+        for (Nodes::const_iterator iit = node->children_.begin();
+             iit != node->children_.end();
+             ++iit)
+        {
+            if (find(*iit))
+                return true;
         }
-
-        State nextState;
-        nextState.parent_  = state.current_;
-        nextState.current_ = child;
-
-        StatefulDispatcher<SumLifter, State> dispatch(*this,nextState);
-        child->visit(dispatch);
         return false;
     }
-
-    template<typename Specific>
-    void handle(State& state, Specific& node)
-    {
-        // ok we have a no summer.. or op we know as lift safe
-        // whatever it is we have to stop..
-    }
-
-    void handle(State& state, Summer&   node)
-    {
-        // dont move summer ordering around but do move it kids on..
-        State nextState;
-        nextState.parent_  = state.current_;
-        nextState.current_ = node.children_[1];
-
-        StatefulDispatcher<SumLifter, State> dispatch(*this,nextState);
-        node.children_[1]->visit(dispatch);
-    }
-
-    void handle(State& state, Mult&     node)
-    {
-        if (test(state, node.children_[0])) return;
-        if (test(state, node.children_[1])) return;
-    }
-
-    void handle(State& state, Dot&      node)
-    {
-        if (test(state, node.children_[0])) return;
-        if (test(state, node.children_[1])) return;
-    }
-
-public:
-    // lift all the sums above other ops
-    SumLifter() :
-        found_(false),
-        parent_(),
-        current_(),
-        summer_()
-    {}
-
-    Handle process(Handle exp)
-    {
-        found_ = true;
-        while (found_)
-        {
-            // Reset  vars
-            parent_.reset();
-            current_.reset();
-            summer_.reset();
-            found_ = false;
-
-            // search for sum to lift
-            State state;
-            state.current_ = exp;
-
-            StatefulDispatcher<SumLifter, State> dispatch(*this,state);
-            exp->visit(dispatch);
-
-            if (found_)
-            {
-                exp = lift(exp);
-            }
-        }
-
-        return exp;
-    }
 };
-
 // ################################################
 // ################################################
 // ################################################
 
+// TODO rework as a dynamic cast(remove dispatch) and templated type (ie same as Has<>)
 class LocateLastSum
 {
     // given an expression that starts with summers find the last one in the chain of them
@@ -523,6 +383,194 @@ public:
     }
 };
 
+// ################################################
+// ################################################
+// ################################################
+
+template <typename Operation>
+class TransformAll
+{
+    // outer walker method to search the tree for transformation points..
+    struct State
+    {
+        Handle parent_;
+        Handle current_;
+        int    currentsIdxInParent_;
+    };
+
+    friend StatefulDispatcher<TransformAll, State>;
+
+    bool      found_;
+    Handle    parent_;
+    Handle    current_;
+    int       currentsIdxInParent_;
+    Operation op_;
+
+    template<typename Specific>
+    bool check(State& state, Specific& node)
+    {
+        // check child
+        if (op_.isApplicable(node))
+        {
+            parent_              = state.parent_;
+            current_             = state.current_;
+            currentsIdxInParent_ = state.currentsIdxInParent_;
+            found_               = true;
+            return true;
+        }
+        return false;
+    }
+
+    void next(State& state)
+    {
+        for (int childIdx = 0;
+             childIdx < state.current_->children_.size();
+             ++childIdx)
+        {
+            State nextState;
+            nextState.parent_  = state.current_;
+            nextState.current_ = state.current_->children_[childIdx];
+            nextState.currentsIdxInParent_ = childIdx;
+
+            StatefulDispatcher<TransformAll, State> dispatch(*this,nextState);
+            nextState.current_->visit(dispatch);
+        }
+    }
+
+    template<typename Specific>
+    void handle(State& state, Specific& node)
+    {
+        if (check(state, node))
+            return;
+        next(state);
+    }
+
+public:
+    // lift all the sums above other ops
+    TransformAll() :
+        op_(),
+        found_(false),
+        parent_(),
+        current_()
+    {}
+
+    Handle process(Handle exp)
+    {
+        found_ = true;
+        while (found_)
+        {
+            // Reset  vars
+            parent_.reset();
+            current_.reset();
+            currentsIdxInParent_ = -1;
+            found_ = false;
+
+            // search for transformable item
+            {
+                State state;
+                state.parent_.reset();
+                state.current_ = exp;
+                state.currentsIdxInParent_ = -1;
+
+                StatefulDispatcher<TransformAll, State> dispatch(*this,state);
+                exp->visit(dispatch);
+            }
+
+            // TODO it maybe possible to restart searching from the parent of the
+            // found node instead of the top of the tree.. check and optimise
+            if (found_)
+            {
+                if (parent_.get() == NULL)
+                {
+                    exp = op_.transform(exp);
+                }
+                else
+                {
+                    Handle newCurrent = op_.transform(current_);
+                    if (newCurrent != current_)
+                        parent_->children_[currentsIdxInParent_] = newCurrent;
+                }
+            }
+        }
+
+        return exp;
+    }
+};
+
+// ################################################
+// ################################################
+// ################################################
+
+class LiftSum
+{
+    // lift all the sums above other ops
+    //  starts as
+    //               C
+    //              / \
+    //             S
+    //             |
+    //             K
+    //  converts to
+    //               S
+    //               |
+    //               C
+    //              / \
+    //             K
+
+public:
+    LiftSum()
+    {}
+
+    Handle transform(Handle node)
+    {
+        // note we only change once! as it might be chained on that side
+        for (int childIdx = 0;
+             childIdx < node->children_.size();
+             ++childIdx)
+        {
+            if (const Summer* ptr = dynamic_cast<Summer*>(node->children_[childIdx].get()))
+            {
+                // ok found it
+                Handle summer = node->children_[childIdx];
+
+                // so rotate parent to child
+                node->children_[childIdx] = summer->children_[1];
+                summer->children_[1] = node;
+
+                return summer;
+            }
+        }
+
+        // odd transform failed..
+        return node;
+    }
+
+    template<typename Specific>
+    bool isApplicable(Specific& node)  { return false; }
+
+    bool isApplicable(Mult&     node)
+    {
+        if (const Summer* ptr = dynamic_cast<Summer*>(node.children_[0].get()))
+            return true;
+        if (const Summer* ptr = dynamic_cast<Summer*>(node.children_[1].get()))
+            return true;
+        return false;
+    }
+
+    bool isApplicable(Dot&      node)
+    {
+        if (const Summer* ptr = dynamic_cast<Summer*>(node.children_[0].get()))
+            return true;
+        if (const Summer* ptr = dynamic_cast<Summer*>(node.children_[1].get()))
+            return true;
+        return false;
+    }
+};
+
+// ################################################
+// ################################################
+// ################################################
+
 class RotateDotsMultsToRight
 {
     //  starts as: (U_k*x_k).(U_i*U_j*m_ij)
@@ -543,159 +591,48 @@ class RotateDotsMultsToRight
     //         Ui  *
     //            / \
     //           Uj  Xij
-    Handle current_;
 
-    Dispatcher<RotateDotsMultsToRight> dispatch_;
+public:
+    RotateDotsMultsToRight()
+    {}
 
-    friend Dispatcher<RotateDotsMultsToRight>;
-
-    template<typename Specific>
-    void handle(Specific& node)
-    {
-        // left side op is something we cant handle
-        // whatever it is just stop..
-    }
-
-    void handle(Dot& node)
-    {
-        // ok left is also a dot..
-        // well then thats the new top node..
-        // rotate it up as the head
-        doRotate();
-    }
-
-    void handle(Mult& node)
-    {
-        // ok left is also a dot..
-        // well then thats the new top node..
-        // rotate it up as the head
-        doRotate();
-    }
-
-    Handle doRotate(Handle exp)
+    Handle transform(Handle current)
     {
         Handle newTop = current->children_[0];
 
-        current_->children_[0] = newTop->children_[1];
-        newTop->children_[1] = current_;
+        current->children_[0] = newTop->children_[1];
+        newTop->children_[1] = current;
 
-        current_ = newTop_;
+        return newTop;
     }
 
-
-public:
-    RotateDotsMultsToRight() :
-        dispatch(*this)
-    {}
-
-    Handle transform(Handle curent)
-    {
-        current_ = current;
-        // TODO .. outer core to walk the tree for candidates
-
-        Dispatcher<RotateDotsMultsToRightr> dispatch(*this);
-        current_->children_[0]->visit(dispatch);
-
-        return current_;
-    }
-
-    // for outer Looper to decide
+    // for outer TransformAll to decide
     template<typename Specific>
     bool isApplicable(Specific& node)  { return false; }
-    bool isApplicable(Dot&      node)  { return true; }
-    bool isApplicable(Mult&     node)  { return true; }
-};
 
-template <typename Operation>
-class TransformAll
-{
-    // outer walker method for RotateDotsMultsToRightAll
-    struct State
+    bool isApplicable(Dot&      node)
     {
-        Handle parent_;
-        Handle current_;
-    };
-
-    friend StatefulDispatcher<TransformAll, State>;
-
-    bool   found_;
-    Handle parent_;
-    Handle current_;
-
-    bool check(State& state)
-    {
-        // check child
-        if (op.isApplicable(child))
-        {
-            parent_  = state.parent_;
-            current_ = state.current_;
-            found_   = true;
+        if (const Dot* ptr = dynamic_cast<Dot*>(node.children_[0].get()))
             return true;
-        }
+        if (const Mult* ptr = dynamic_cast<Mult*>(node.children_[0].get()))
+            return true;
         return false;
     }
 
-    void next(State& state)
+    bool isApplicable(Mult&     node)
     {
-        for (Nodes::iterator nit = state.current_->children_.begin();
-             nit = state.current_->children_.end();
-             ++nit)
-        {
-            State nextState;
-            nextState.parent_  = state.current_;
-            nextState.current_ = child;
-
-            StatefulDispatcher<SumLifter, State> dispatch(*this,nextState);
-            child->visit(dispatch);
-        }
+        if (const Dot* ptr = dynamic_cast<Dot*>(node.children_[0].get()))
+            return true;
+        if (const Mult* ptr = dynamic_cast<Mult*>(node.children_[0].get()))
+            return true;
+        return false;
     }
-
-    template<typename Specific>
-    void handle(State& state, Specific& node)
-    {
-        if (check(state))
-            return;
-        next(state);
-    }
-
-public:
-    // lift all the sums above other ops
-    TransformAll() :
-        found_(false),
-        parent_(),
-        current_()
-    {}
-
-    Handle process(Handle exp)
-    {
-        found_ = true;
-        while (found_)
-        {
-            // Reset  vars
-            parent_.reset();
-            current_.reset();
-            found_ = false;
-
-            // search for sum to lift
-            State state;
-            state.current_ = exp;
-
-            StatefulDispatcher<SumLifter, State> dispatch(*this,state);
-            exp->visit(dispatch);
-
-            if (found_)
-            {
-                exp = lift(exp);
-            }
-        }
-
-        return exp;
-    }
-
-}
+};
 
 class AttachDotsToUnitVectors
 {
+    // pre-requiste: the graph is right side orientation
+
     // given a dot or mult op... check its left side for rotatio{
     //  starts as: U_k*x_k.U_i*U_j*m_ij
     //      *
@@ -713,13 +650,44 @@ class AttachDotsToUnitVectors
     //    Uk  *
     //       / \
     //      Xk  *
-    //          / \
-    //         Ui  *
-    //            / \
-    //           Uj  Xij
+    //         / \
+    //        Ui  *
+    //           / \
+    //          Uj  Xij
+public:
+    AttachDotsToUnitVectors() {}
+
+    Handle transform(Handle mult)
+    {
+        // hmm not safe for a self run...
+        Handle dot = mult->children_[1];
+        Handle nonVectorDotKids = dot->children_[0];
+
+        dot->children_[0]  = mult->children_[0];
+        mult->children_[0] = nonVectorDotKids;
+        mult->children_[1] = dot->children_[1];
+        dot->children_[1]  = mult;
+
+        return dot;
+    }
+
+    // for outer TransformAll to decide
+    template<typename Specific>
+    bool isApplicable(Specific& node)  { return false; }
+    bool isApplicable(Mult&     node)
+    {
+        Handle rightSide = node.children_[1];
+        if (const Dot* ptr = dynamic_cast<Dot*>(rightSide.get()))
+        {
+            Has<UnitVec> hasVectors;
+            if (not hasVectors.find(rightSide->children_[0]))
+                return true;
+        }
+        return false;
+    }
 };
 
-class LiftUnitVectorToLeft
+class LiftUnitVectorUp
 {
     // stating with: U_k.x_k*U_i*U_j*m_ij
     //      .
@@ -727,126 +695,53 @@ class LiftUnitVectorToLeft
     //    Uk  *
     //       / \
     //      Xk  *
-    //          / \
-    //         Ui  *
-    //            / \
-    //           Uj  Xij
+    //         / \
+    //        Ui  *
+    //           / \
+    //          Uj  Xij
     // convert to: U_k.U_i*U_j*x_k*m_ij
     //      .
     //     / \
     //    Uk  *
     //       / \
     //      Ui  *
-    //          / \
-    //         Uj  *
-    //            / \
-    //          Xk   Xij
-}
-
-class UnitVectorGatherLeft
-{
-    // move all Unit vecotrs to the left side following summers
-    // be careful as dot products can not be crossed by unit vectors
-
-    // assumes that the summers have been moved to left most outher
-
-    //  starts as: (U_k*x_k).(U_i*U_j*m_ij)
-    //         .
-    //       /   \
-    //      *     *
-    //     / \   / \
-    //   Uk  Xk Ui  *
-    //             / \
-    //            Uj  Xij
-    //  convrts to: U_k*x_k.U_i*U_j*m_ij
-    //      *
-    //     / \
-    //    Uk  .
-    //       / \
-    //      Xk  *
     //         / \
-    //        Ui  *
+    //        Uj  *
     //           / \
-    //          Uj  Xij
-    //  converts to: U_k.x_k*U_i*U_j*m_ij
-    //      .
-    //     / \
-    //    Uk  *
-    //       / \
-    //      Xk  *
-    //         / \
-    //        Ui  *
-    //           / \
-    //          Uj  Xij
-    //  converts to: U_k.U_i*x_k*U_j*m_ij
-    //     .
-    //    / \
-    //   Uk  *
-    //      / \
-    //     Ui  *
-    //        / \
-    //       Xk  *
-    //          / \
-    //         Uj  Xij
-    //  converts to: U_k.U_i*U_j*x_k*m_ij
-    //     .
-    //    / \
-    //   Uk  *
-    //      / \
-    //     Ui  *
-    //        / \
-    //       Uj  *
-    //          / \
-    //         Xk  Xij
-
+    //         Xk   Xij
 public:
+    LiftUnitVectorUp() {}
 
-    UnitVectorGatherLeft()
-    {}
+    Handle transform(Handle mult)
+    {
+        // hmm not safe for a self run...
+        Handle mult2nd = mult->children_[1];
+        Handle nonVectorLeftKids = mult->children_[0];
 
-     Handle process(Handle exp)
-     {
-         // first locate the last of the summer chains
-         LocateLastSum lls;
-         Handle lastSum = lls.find(l);
+        mult->children_[0]  = mult2nd->children_[0];
+        mult2nd->children_[0] = nonVectorLeftKids;
 
-         Handle workingPoint;
-         if (lastSum.get() == NULL)
-         {
-             workingPoint = exp;
-         }
-         else
-         {
-             workingPoint = lastSum->children_[1];
-         }
+        return mult;
+    }
 
-         // ok so now we are at the working point in the graph..
-         // we want to locate all unit vectors and bring them into
-         // the left sides at the working point
+    // for outer TransformAll to decide
+    template<typename Specific>
+    bool isApplicable(Specific& node)  { return false; }
 
-         // rotate all mults/dots to right hand side
-         RotateDotsMultsToRight rotateToRight;
-         workingPoint = rotateToRight.rotate(workingPoint);
-
-         AttachDotsToUnitVectors dotToUnits;
-         workingPoint = dotToUnits.gather(workingPoint);
-
-         LiftUnitVectorToLeft liftUnits;
-         workingPoint = liftUnits.gather(workingPoint);
-
-         // reconnect end working point to summers
-
-         if (lastSum.get() == NULL)
-         {
-             exp = workingPoint;
-         }
-         else
-         {
-             lastSum->children_[1] = workingPoint;
-         }
-
-         return exp;
-     }
+    bool isApplicable(Mult&     node)
+    {
+        Handle rightSide = node.children_[1];
+        if (const Mult* ptr = dynamic_cast<Mult*>(rightSide.get()))
+        {
+            if (const UnitVec* ptr = dynamic_cast<UnitVec*>(rightSide->children_[0].get()))
+            {
+                Has<UnitVec> hasVectors;
+                if (not hasVectors.find(node.children_[0]))
+                    return true;
+            }
+        }
+        return false;
+    }
 };
 
 

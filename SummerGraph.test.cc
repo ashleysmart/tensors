@@ -31,16 +31,31 @@ int main()
     Handle l = Make::dot(x,m);
     EXPECT_STREAMED_AS("sum_k(U_k*x_k).sum_i(sum_j(U_i*U_j*m_ij))") << l;
 
+    std::cout << "\n begin transforms....\n";
+
     // search tree and move summers to front
-    SumLifter lift;
+    // SumLifter lift;
+    TransformAll<LiftSum> lift;
     l = lift.process(l);
-    std::cout << "\n after lift..\n";
     EXPECT_STREAMED_AS("sum_k(sum_i(sum_j(U_k*x_k.U_i*U_j*m_ij)))") << l;
 
     LocateLastSum lls;
     Handle lastSum = lls.find(l);
     EXPECT_STREAMED_AS("sum_j(U_k*x_k.U_i*U_j*m_ij)") << lastSum;
 
-    // search tree and move unit vectors together
+    // move mult/dot sequances to right side orientation
+    TransformAll<RotateDotsMultsToRight> allDotsRotate;
+    l = allDotsRotate.process(l);
+    // note following looks iffy becase () are not printed
+    EXPECT_STREAMED_AS("sum_k(sum_i(sum_j(U_k*x_k.U_i*U_j*m_ij)))") << l;
+
+    // mode dots towards applicable unit vetors
+    TransformAll<AttachDotsToUnitVectors> moveDotsToVectors;
+    l = moveDotsToVectors.process(l);
+    EXPECT_STREAMED_AS("sum_k(sum_i(sum_j(U_k.x_k*U_i*U_j*m_ij)))") << l;
+
+    TransformAll<LiftUnitVectorUp> liftUnitVecUp;
+    l = liftUnitVecUp.process(l);
+    EXPECT_STREAMED_AS("sum_k(sum_i(sum_j(U_k.U_i*U_j*x_k*m_ij)))") << l;
 
 }
